@@ -1,0 +1,258 @@
+---
+title: "BA_Project"
+author: "Yifan Xia"
+date: "11/24/2020"
+output: html_document
+---
+
+
+```{r}
+#install.packages("stringr") 
+library(stringr) 
+#install.packages("rapportools")            
+library(rapportools) 
+#install.packages("dplyr")
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(ISLR)
+library(caret)
+library(glmnet)
+
+airbnb_backup = read.csv("/Users/mac/Desktop/E4650/project/NewYork1.csv")
+```
+
+```{r}
+airbnb = airbnb_backup
+```
+
+
+## Data Cleaning
+
+
+#### T/F to 1/0
+
+
+```{r}
+for (i in c("host_is_superhost","host_has_profile_pic","host_identity_verified","has_availability","instant_bookable")){
+  airbnb[,i] = ifelse(airbnb[,i] == "t", 1, 0)
+}
+```
+
+
+#### Missing values, N/A and 0
+
+
+```{r}
+#Change 'N/A' in 'host_response_time' to 'a few days or more'
+airbnb[which(airbnb$host_response_time == 'N/A'),'host_response_time'] = 'a few days or more'
+
+#convert 'host_response_rate'&'host_acceptance_rate'&'price'  to numeric, replace 'N/A' with 0
+airbnb$host_response_rate = as.character(airbnb$host_response_rate)
+airbnb$host_response_rate = str_remove_all(airbnb$host_response_rate, "[%]")
+airbnb$host_response_rate = as.numeric(replace(airbnb$host_response_rate, which(airbnb$host_response_rate=='N/A'),'0'))
+
+airbnb$host_acceptance_rate = as.character(airbnb$host_acceptance_rate)
+airbnb$host_acceptance_rate = replace(airbnb$host_acceptance_rate,which(airbnb$host_acceptance_rate=='N/A'),'0')
+airbnb$host_acceptance_rate = as.numeric(str_remove_all(airbnb$host_acceptance_rate, "[%]"))
+
+airbnb$price = as.character(airbnb$price)
+airbnb$price = as.numeric(str_remove_all(airbnb$price, "[$]"))
+
+#replace 'N/A' in "bathrooms_text"&"bedrooms"&"beds" with 0
+airbnb[which(is.na(airbnb$bedrooms)),'bedrooms'] = 0
+airbnb[which(is.na(airbnb$beds)),'beds'] = 0
+airbnb[which(airbnb$bathrooms_text == ''),'bathrooms_text'] = '0 baths'
+
+#convert bathrooms_text to numbers. Conbine 'bath' and 'shared bath'
+airbnb$bathrooms_text = as.character(airbnb$bathrooms_text)
+airbnb[which(airbnb$bathrooms_text %in% c('Half-bath',"Private half-bath","Shared half-bath") == 'TRUE'),'bathrooms_text'] = '0.5'
+airbnb$bathrooms_text = as.numeric(str_remove_all(airbnb$bathrooms_text, "[%,shared,baths,private]"))
+
+
+#remove rows: all blank in host_response
+airbnb = airbnb[-which(is.na(airbnb$host_response_rate)),]
+#remove rows: price is 0 or NA
+airbnb = airbnb[-which(is.empty(airbnb$price)),]
+#remove rows: total_host_listing_count is 0 or NA 
+airbnb = airbnb[-which(is.empty(airbnb$host_total_listings_count)),]
+#remove rows: containing blanks in review_scores
+airbnb = airbnb[-which(is.na(airbnb$review_scores_rating)),]
+airbnb = airbnb[-which(is.na(airbnb$review_scores_accuracy)),]
+airbnb = airbnb[-which(is.na(airbnb$review_scores_checkin)),]
+airbnb = airbnb[-which(is.na(airbnb$review_scores_cleanliness)),]
+airbnb = airbnb[-which(is.na(airbnb$review_scores_communication)),] 
+airbnb = airbnb[-which(is.na(airbnb$review_scores_location)),]
+airbnb = airbnb[-which(is.na(airbnb$review_scores_value)),]
+```
+
+#### Value coversion
+
+```{r}
+#convert amenities to number of amenities, host_verifications to number of host verifications
+airbnb$amenities = as.character(airbnb$amenities)
+airbnb$host_verifications = as.character(airbnb$host_verifications)
+
+for (i in 1:nrow(airbnb)){
+ airbnb$amenities[i] = as.numeric(as.character(length(strsplit(airbnb$amenities[i],',')[[1]])))
+ airbnb$host_verifications[i] = as.numeric(length(strsplit(airbnb$host_verifications[i],',')[[1]]))
+}
+airbnb$amenities = as.numeric(as.character(airbnb$amenities))
+airbnb$host_verifications = as.numeric(as.character(airbnb$host_verifications))
+
+```
+
+
+#### Add a column: duration between first and last review (in years)
+
+
+```{r}
+airbnb$review_duration = as.Date(as.character(airbnb$last_review),format="%Y-%m-%d")-as.Date(as.character(airbnb$first_review), format="%Y-%m-%d")
+airbnb$review_duration = as.numeric(airbnb$review_duration / 365)
+airbnb = airbnb[,!(names(airbnb) %in% c("first_review","last_review"))]
+```
+
+
+#### Remove unwanted columns
+
+
+
+```{r}
+remove_col = c("neighborhood_overview","listing_url","scrape_id","last_scraped","picture_url","host_url","host_name","host_location","host_thumbnail_url","host_picture_url","host_listings_count","neighbourhood","latitude","longitude","bathrooms","minimum_minimum_nights","maximum_minimum_nights","minimum_maximum_nights","maximum_maximum_nights","minimum_nights_avg_ntm","maximum_nights_avg_ntm","calendar_updated","calendar_last_scraped","license","calculated_host_listings_count","calculated_host_listings_count_entire_homes","calculated_host_listings_count_private_rooms","calculated_host_listings_count_shared_rooms","reviews_per_month","host_neighbourhood","neighbourhood_cleansed","name","host_id","description","host_since","property_type","host_about","review_scores_accuracy","review_scores_cleanliness","review_scores_checkin","review_scores_communication","review_scores_location","review_scores_value","has_availability","id")
+airbnb = airbnb[,!(names(airbnb) %in% remove_col)]
+names(airbnb)
+```
+
+
+check which columns still contain N/A
+```{r}
+na = rep(0,ncol(airbnb))
+for (i in 1:ncol(airbnb)){
+  na[i] = sum(is.na(airbnb[,i]))
+}
+names(airbnb)[which(na > 0)]
+```
+
+
+## EDA 
+
+
+
+#### Correlation Heat Map
+
+
+
+```{r}
+airbnb_quant = airbnb[,!(names(airbnb) %in% c("host_response_time","neighbourhood_group_cleansed","room_type"))]
+
+melted_airbnb <- melt(round(cor(airbnb_quant),2))
+head(melted_airbnb,20)
+
+ggheatmap <- ggplot(melted_airbnb, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+    name="Pearson\nCorrelation") +
+  theme_minimal()+ # minimal theme
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 8, hjust = 1))+
+ coord_fixed()
+
+ggheatmap + 
+geom_text(aes(Var2, Var1, label = value), color = "black", size = 1) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank(),
+  legend.justification = c(1, 0),
+  legend.direction = "horizontal")+
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5))
+```
+
+
+#### Plot every column against review_scores_rating
+
+
+
+```{r}
+for (i in (1:(ncol(airbnb_quant)-1))){
+  plot(airbnb_quant[,!(names(airbnb_quant) %in% c('review_scores_rating'))][,i],airbnb_quant$review_scores_rating,col='navy',pch=20,
+       xlab=paste(names(airbnb_quant[,!(names(airbnb_quant) %in% c('review_scores_rating'))][i])),
+       ylab='review_scores_rating',
+       main = paste(names(airbnb_quant[,!(names(airbnb_quant) %in% c('review_scores_rating'))][i]),' VS  review_scores_rating'))
+} 
+```
+
+
+
+## Multiple Regression Model
+
+
+
+```{r}
+#split data to training data, validation data and test data
+set.seed(123)
+shuffled_index = sample.int(nrow(airbnb), size = nrow(airbnb))
+training = airbnb[shuffled_index[1:15057],]
+validation = airbnb[shuffled_index[15058:22586],]
+test = airbnb[shuffled_index[22587:30114],]
+```
+
+
+#### Base Model: contains all variables
+
+
+```{r}
+base_model = lm(review_scores_rating~.,data = training)
+summary(base_model)
+#base model MSE on validation
+base_predict = predict(base_model,newdata = validation)
+base_mse = mean((base_predict - validation$review_scores_rating)^2)
+```
+
+
+#### Lasso with optimal lambda     
+
+
+```{r}
+lambda_seq = seq(0,100,0.1)
+x=model.matrix(review_scores_rating~.,airbnb)[,-27]
+y=airbnb$review_scores_rating
+train=shuffled_index[1:15057]
+val = shuffled_index[15058:22586]
+ttest=shuffled_index[22587:30114]
+
+#regress on training data to find best lambda
+lasso_mod=glmnet(x[train,],y[train],alpha=1,lambda=lambda_seq)
+plot(lasso_mod)
+
+cv_out=cv.glmnet(x[train,],y[train],lambda=lambda_seq,alpha=1)
+plot(cv_out)  
+bestlam=cv_out$lambda.min
+bestlam
+#MSE on validation data using bestlam
+lasso_pred=predict(lasso_mod,s=bestlam,newx=x[val,])
+lasso_mse = mean((lasso_pred-y[val])^2) 
+
+as.data.frame(c('Base Model MSE',base_mse),c('Lasso MSE',lasso_mse))
+```
+
+
+## Predict
+
+
+```{r}
+best_model = lm(review_scores_rating~.,data = airbnb[shuffled_index[1:22586],])
+summary(best_model)
+#best model MSE on test data
+best_predict = predict(best_model,newdata = test)
+best_mse = mean((best_predict - test$review_scores_rating)^2)
+best_mse
+```
+
+
+
